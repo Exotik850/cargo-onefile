@@ -1,0 +1,11 @@
+[package]
+name = "cargo-onefile"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.80"
+cargo_toml = "0.19.2"
+clap = { version = "4.5.2", features = ["derive"] }
+rayon = "1.9.0"
+ignore = "0.4.22"
