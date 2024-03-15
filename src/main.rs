@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::Parser;
 use ignore::WalkBuilder;
 use rayon::prelude::*;
@@ -78,6 +79,31 @@ struct OnefileArgs {
     #[arg(long, default_value = "//")]
     separator: String,
 
+    /// Exclude files older than the specified datetime.
+    /// Format: "YYYY-MM-DD HH:MM:SS"
+    ///
+    /// Will not work if `newer_than` is also set and is older than `older_than`.
+    #[arg(long)]
+    newer_than: Option<NaiveDateTime>,
+    /// Exclude files newer than the specified datetime.
+    /// Format: "YYYY-MM-DD HH:MM:SS"
+    ///
+    /// Will not work if `older_than` is also set and is newer than `newer_than`.
+    #[arg(long)]
+    older_than: Option<NaiveDateTime>,
+
+    /// Exclude files larger than the specified size.
+    ///
+    /// Will not work if `smaller_than` is also set and is larger than `larger_than`.
+    #[arg(long)]
+    smaller_than: Option<u64>,
+
+    /// Exclude files smaller than the specified size.
+    ///
+    /// Will not work if `larger_than` is also set and is smaller than `smaller_than`.
+    #[arg(long)]
+    larger_than: Option<u64>,
+
     /// Exclude the specified files from the output.
     /// Accepts multiple values.
     ///
@@ -99,7 +125,23 @@ fn main() -> Result<()> {
         skip_gitignore,
         separator,
         info,
+        newer_than,
+        older_than,
+        smaller_than,
+        larger_than,
     } = OnefileArgs::parse();
+
+    if let (Some(st), Some(lt)) = (smaller_than, larger_than) {
+        if st > lt {
+            bail!("`smaller_than` cannot be larger than `larger_than`");
+        }
+    }
+
+    if let (Some(nt), Some(ot)) = (newer_than, older_than) {
+        if nt > ot {
+            bail!("`newer_than` cannot be older than `older_than`");
+        }
+    }
 
     let start = info.then(Instant::now);
 
@@ -166,6 +208,28 @@ fn main() -> Result<()> {
                     if exclude.iter().any(|e| path.ends_with(e)) {
                         return None;
                     }
+
+                    if smaller_than.is_some() || larger_than.is_some() {
+                        let metadata = f.metadata().ok()?;
+                        let meta_len = metadata.len();
+                        if smaller_than.is_some_and(|st| meta_len > st) {
+                            return None;
+                        }
+                        if larger_than.is_some_and(|lt| meta_len < lt) {
+                            return None;
+                        }
+                    }
+
+                    if older_than.is_some() || newer_than.is_some() {
+                      let metadata = f.metadata().ok()?;
+                      let modified: DateTime<Utc> = metadata.modified().ok()?.into();
+                      if older_than.is_some_and(|ot| modified > ot.and_utc()) {
+                          return None;
+                      }
+                      if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
+                          return None;
+                      }
+                  }
 
                     path.extension()
                         .map_or(false, |ext| ext == "rs")
