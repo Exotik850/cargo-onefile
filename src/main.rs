@@ -23,6 +23,14 @@ struct OnefileArgs {
     #[arg(long)]
     stdout: bool,
 
+    /// Include a table of contents at the top of the output.
+    /// This will list all the files included in the output.
+    ///
+    /// Example:
+    ///  cargo onefile --table-of-contents
+    #[arg(long, action)]
+    table_of_contents: bool,
+
     /// Optional path to the output file.
     ///
     /// Example:
@@ -68,6 +76,7 @@ struct OnefileArgs {
     info: bool,
 
     /// Add the dependencies of the project to the output.
+    /// 
     /// WARNING: This will increase the size of the output significantly.
     #[arg(short, long, action)]
     dependencies: bool,
@@ -80,36 +89,66 @@ struct OnefileArgs {
     separator: String,
 
     /// Exclude files older than the specified datetime.
+    /// 
     /// Format: "YYYY-MM-DD HH:MM:SS"
     ///
     /// Will not work if `newer_than` is also set and is older than `older_than`.
+    ///
+    /// Example:
+    ///  cargo onefile --older-than "2021-01-01 00:00:00"
     #[arg(long)]
     newer_than: Option<NaiveDateTime>,
     /// Exclude files newer than the specified datetime.
+    /// 
     /// Format: "YYYY-MM-DD HH:MM:SS"
     ///
     /// Will not work if `older_than` is also set and is newer than `newer_than`.
+    ///
+    /// Example:
+    ///   cargo onefile --newer-than "2021-01-01 00:00:00"
     #[arg(long)]
     older_than: Option<NaiveDateTime>,
 
-    /// Exclude files larger than the specified size.
+    /// Exclude files larger than the specified size in bytes.
     ///
     /// Will not work if `smaller_than` is also set and is larger than `larger_than`.
+    ///
+    /// Example:
+    ///  cargo onefile --larger-than 1000000
     #[arg(long)]
     smaller_than: Option<u64>,
 
-    /// Exclude files smaller than the specified size.
+    /// Exclude files smaller than the specified size in bytes.
     ///
     /// Will not work if `larger_than` is also set and is smaller than `smaller_than`.
+    ///
+    /// Example:
+    ///   cargo onefile --smaller-than 1000
     #[arg(long)]
     larger_than: Option<u64>,
+
+    /// Max number of files to include in the output.
+    /// If the number of files found exceeds this value, the command will ignore the rest of the files found past this number.
+    ///
+    /// Example:
+    ///  cargo onefile --max-files 100
+    #[arg(long)]
+    max_files: Option<usize>,
+
+    /// Include files with the specified extension.
+    /// Defaults to "rs".
+    ///
+    /// Example:
+    ///  cargo onefile --extension toml
+    #[arg(short = 'E', long)]
+    extension: Option<Vec<String>>,
 
     /// Exclude the specified files from the output.
     /// Accepts multiple values.
     ///
     /// Example:
     ///   cargo onefile --exclude "file1.rs" --exclude "file2.rs"
-    #[arg(long)]
+    #[arg(short, long)]
     exclude: Vec<String>,
 }
 
@@ -129,6 +168,9 @@ fn main() -> Result<()> {
         older_than,
         smaller_than,
         larger_than,
+        table_of_contents,
+        extension,
+        max_files,
     } = OnefileArgs::parse();
 
     if let (Some(st), Some(lt)) = (smaller_than, larger_than) {
@@ -194,7 +236,7 @@ fn main() -> Result<()> {
         search_paths.push(PathBuf::from("."));
     }
 
-    let source_files: Vec<_> = search_paths
+    let mut source_files: Vec<_> = search_paths
         .into_par_iter()
         .flat_map(|f| {
             WalkBuilder::new(f)
@@ -204,6 +246,18 @@ fn main() -> Result<()> {
                 .take_while(|e| e.depth() <= depth)
                 .filter_map(|f| {
                     let path = f.path();
+
+                    // Extension filter
+                    if let Some(extension) = &extension {
+                        if !extension.iter().any(|ext_user| {
+                            path.extension()
+                                .map_or(false, |ext_file| ext_file.to_str() == Some(ext_user))
+                        }) {
+                            return None;
+                        }
+                    } else if path.extension().map_or(false, |ext| ext == "rs") {
+                        return None;
+                    }
 
                     if exclude.iter().any(|e| path.ends_with(e)) {
                         return None;
@@ -221,30 +275,42 @@ fn main() -> Result<()> {
                     }
 
                     if older_than.is_some() || newer_than.is_some() {
-                      let metadata = f.metadata().ok()?;
-                      let modified: DateTime<Utc> = metadata.modified().ok()?.into();
-                      if older_than.is_some_and(|ot| modified > ot.and_utc()) {
-                          return None;
-                      }
-                      if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
-                          return None;
-                      }
-                  }
+                        let metadata = f.metadata().ok()?;
+                        let modified: DateTime<Utc> = metadata.modified().ok()?.into();
+                        if older_than.is_some_and(|ot| modified > ot.and_utc()) {
+                            return None;
+                        }
+                        if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
+                            return None;
+                        }
+                    }
 
-                    path.extension()
-                        .map_or(false, |ext| ext == "rs")
-                        .then(|| path.to_path_buf())
+                    Some(path.to_path_buf())
                 })
                 .collect::<Vec<_>>()
         })
         .collect();
 
+    if let Some(max_files) = max_files {
+        if source_files.len() > max_files {
+            eprintln!(
+                "Found {} files, but the maximum number of files is set to {}",
+                source_files.len(),
+                max_files
+            );
+            source_files.truncate(max_files);
+        }
+    }
+
     // For each path, read the contents into a string
     let mut file_contents: Vec<_> = source_files
         .par_iter()
-        .map(|file| {
-            let content = std::fs::read_to_string(file);
-            (file.clone(), content)
+        .filter_map(|file| match std::fs::read_to_string(file) {
+            Ok(content) => Some((file.clone(), content)),
+            Err(e) => {
+                eprintln!("Error reading file: {}", e);
+                None
+            }
         })
         .collect();
 
@@ -255,11 +321,31 @@ fn main() -> Result<()> {
         .map(|head| std::fs::read_to_string(&head))
         .transpose()?;
 
+    let table_of_contents = table_of_contents.then(|| {
+        let toc_len = file_contents.len() + 5 + head.as_ref().map_or(0, String::len);
+        let mut curr_line = 0;
+        let mut toc = String::from("// Table of Contents\n// ==================\n");
+        for (file, content) in &file_contents {
+            let display = std::fs::canonicalize(file)
+                .as_ref()
+                .unwrap_or(file)
+                .display()
+                .to_string();
+            toc.push_str(&format!(
+                "// Ln{} : {}\n",
+                curr_line + toc_len,
+                display.trim_start_matches("\\\\?\\")
+            ));
+            curr_line += content.lines().count() + 2;
+        }
+        toc + "// ==================\n"
+    });
+
     if let Some(start) = start {
         let elapsed = start.elapsed();
         let sum = file_contents
             .iter()
-            .map(|(_, content)| content.as_ref().map_or(0, |c| c.lines().count()))
+            .map(|(_, content)| content.lines().count())
             .sum::<usize>();
 
         eprintln!(
@@ -272,17 +358,23 @@ fn main() -> Result<()> {
         if let Some(head) = head {
             println!("{}", head);
         }
+        if let Some(toc) = table_of_contents {
+            println!("{}", toc);
+        }
         for (file, content) in file_contents {
             println!("{} {}", separator, file.display());
-            println!("{}", content?);
+            println!("{}", content);
         }
     } else {
         let mut output = std::fs::File::create(&output)?;
         if let Some(head) = head {
             writeln!(output, "{}", head)?;
         }
+        if let Some(toc) = table_of_contents {
+            writeln!(output, "{}", toc)?;
+        }
         for (file, content) in file_contents {
-            writeln!(output, "{} {}\n{}", separator, file.display(), content?)?;
+            writeln!(output, "{} {}\n{}", separator, file.display(), content)?;
         }
     }
 
