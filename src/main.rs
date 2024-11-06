@@ -5,9 +5,10 @@ use ignore::WalkBuilder;
 use rayon::prelude::*;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "Cargo Onefile")]
 #[command(
     about = "Generate a single file that contains all the source code of a Rust project.
@@ -76,7 +77,7 @@ struct OnefileArgs {
     info: bool,
 
     /// Add the dependencies of the project to the output.
-    /// 
+    ///
     /// WARNING: This will increase the size of the output significantly.
     #[arg(short, long, action)]
     dependencies: bool,
@@ -89,7 +90,7 @@ struct OnefileArgs {
     separator: String,
 
     /// Exclude files older than the specified datetime.
-    /// 
+    ///
     /// Format: "YYYY-MM-DD HH:MM:SS"
     ///
     /// Will not work if `newer_than` is also set and is older than `older_than`.
@@ -99,7 +100,7 @@ struct OnefileArgs {
     #[arg(long)]
     newer_than: Option<NaiveDateTime>,
     /// Exclude files newer than the specified datetime.
-    /// 
+    ///
     /// Format: "YYYY-MM-DD HH:MM:SS"
     ///
     /// Will not work if `older_than` is also set and is newer than `newer_than`.
@@ -153,6 +154,7 @@ struct OnefileArgs {
 }
 
 fn main() -> Result<()> {
+    let args = OnefileArgs::parse();
     let OnefileArgs {
         stdout,
         dependencies,
@@ -171,7 +173,7 @@ fn main() -> Result<()> {
         table_of_contents,
         extension,
         max_files,
-    } = OnefileArgs::parse();
+    } = args.clone();
 
     if let (Some(st), Some(lt)) = (smaller_than, larger_than) {
         if st > lt {
@@ -211,10 +213,11 @@ fn main() -> Result<()> {
                     .members
                     .into_iter()
                     .map(|f| manifest_parent.join(f))
-                    .collect()
             })
-            .unwrap_or_else(|| vec![manifest_path.parent().unwrap().to_path_buf()]),
+            .into_iter()
+            .flatten(),
     );
+    search_paths.push(manifest_path.parent().unwrap().to_path_buf());
 
     if dependencies {
         let deps = manifest
@@ -236,59 +239,10 @@ fn main() -> Result<()> {
         search_paths.push(PathBuf::from("."));
     }
 
+    let args = Arc::new(args);
     let mut source_files: Vec<_> = search_paths
         .into_par_iter()
-        .flat_map(|f| {
-            WalkBuilder::new(f)
-                .standard_filters(skip_gitignore)
-                .build()
-                .filter_map(Result::ok)
-                .take_while(|e| e.depth() <= depth)
-                .filter_map(|f| {
-                    let path = f.path();
-
-                    // Extension filter
-                    if let Some(extension) = &extension {
-                        if !extension.iter().any(|ext_user| {
-                            path.extension()
-                                .map_or(false, |ext_file| ext_file.to_str() == Some(ext_user))
-                        }) {
-                            return None;
-                        }
-                    } else if path.extension().map_or(false, |ext| ext == "rs") {
-                        return None;
-                    }
-
-                    if exclude.iter().any(|e| path.ends_with(e)) {
-                        return None;
-                    }
-
-                    if smaller_than.is_some() || larger_than.is_some() {
-                        let metadata = f.metadata().ok()?;
-                        let meta_len = metadata.len();
-                        if smaller_than.is_some_and(|st| meta_len > st) {
-                            return None;
-                        }
-                        if larger_than.is_some_and(|lt| meta_len < lt) {
-                            return None;
-                        }
-                    }
-
-                    if older_than.is_some() || newer_than.is_some() {
-                        let metadata = f.metadata().ok()?;
-                        let modified: DateTime<Utc> = metadata.modified().ok()?.into();
-                        if older_than.is_some_and(|ot| modified > ot.and_utc()) {
-                            return None;
-                        }
-                        if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
-                            return None;
-                        }
-                    }
-
-                    Some(path.to_path_buf())
-                })
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|f| walk_path(f, args.clone()))
         .collect();
 
     if let Some(max_files) = max_files {
@@ -379,4 +333,70 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn walk_path(
+    path: impl AsRef<std::path::Path>,
+    args: Arc<OnefileArgs>,
+) -> Vec<PathBuf> {
+    let OnefileArgs {
+        depth,
+        skip_gitignore,
+        exclude,
+        extension,
+        smaller_than,
+        larger_than,
+        newer_than,
+        older_than,
+        ..
+    } = args.as_ref();
+    WalkBuilder::new(path)
+        .standard_filters(*skip_gitignore)
+        .build()
+        .filter_map(Result::ok)
+        .take_while(|e| e.depth() <= *depth)
+        .filter_map(|f| {
+            let path = f.path();
+
+            // Extension filter
+            if let Some(extension) = &extension {
+                if !extension.iter().any(|ext_user| {
+                    path.extension()
+                        .map_or(false, |ext_file| ext_file.to_str() == Some(ext_user))
+                }) {
+                    return None;
+                }
+            } else if path.extension().map_or(false, |ext| ext == "rs") {
+                return None;
+            }
+
+            if exclude.iter().any(|e| path.ends_with(e)) {
+                return None;
+            }
+
+            if smaller_than.is_some() || larger_than.is_some() {
+                let metadata = f.metadata().ok()?;
+                let meta_len = metadata.len();
+                if smaller_than.is_some_and(|st| meta_len > st) {
+                    return None;
+                }
+                if larger_than.is_some_and(|lt| meta_len < lt) {
+                    return None;
+                }
+            }
+
+            if older_than.is_some() || newer_than.is_some() {
+                let metadata = f.metadata().ok()?;
+                let modified: DateTime<Utc> = metadata.modified().ok()?.into();
+                if older_than.is_some_and(|ot| modified > ot.and_utc()) {
+                    return None;
+                }
+                if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
+                    return None;
+                }
+            }
+
+            Some(path.to_path_buf())
+        })
+        .collect::<Vec<_>>()
 }
