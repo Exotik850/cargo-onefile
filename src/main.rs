@@ -1,10 +1,10 @@
 use anyhow::{bail, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::Parser;
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 use rayon::prelude::*;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -73,7 +73,7 @@ struct OnefileArgs {
     /// Info mode.
     /// This flag is used to measure the performance of the command, as well as the number of files found and the number of lines of code.
     /// It will not write to a file or stdout.
-    #[arg(short, long, action)]
+    #[arg(short = 'I', long, action)]
     info: bool,
 
     /// Add the dependencies of the project to the output.
@@ -136,6 +136,15 @@ struct OnefileArgs {
     #[arg(long)]
     max_files: Option<usize>,
 
+    /// Add a path to include in the output
+    ///
+    /// If the path is a directory, all files in the directory will be included.
+    ///
+    /// Example:
+    /// cargo onefile --include "file1.rs" --include "util/components"
+    #[arg(short, long)]
+    include: Vec<PathBuf>,
+
     /// Include files with the specified extension.
     /// Defaults to "rs".
     ///
@@ -161,9 +170,6 @@ fn main() -> Result<()> {
         output,
         manifest_path,
         head,
-        exclude,
-        depth,
-        skip_gitignore,
         separator,
         info,
         newer_than,
@@ -171,8 +177,11 @@ fn main() -> Result<()> {
         smaller_than,
         larger_than,
         table_of_contents,
-        extension,
         max_files,
+        include,
+        exclude,
+        extension,
+        ..
     } = args.clone();
 
     if let (Some(st), Some(lt)) = (smaller_than, larger_than) {
@@ -189,7 +198,16 @@ fn main() -> Result<()> {
 
     let start = info.then(Instant::now);
 
-    let mut search_paths = vec![];
+    let mut search_paths = include
+        .into_iter()
+        .filter(|f| {
+            let x = f.is_dir() || f.is_file();
+            if !x {
+                eprintln!("File not found: {}", f.display());
+            }
+            x
+        })
+        .collect::<Vec<_>>();
     let Some(manifest_parent) = manifest_path.parent() else {
         // If the manifest path has no parent, we can't search for other files
         bail!(
@@ -198,26 +216,18 @@ fn main() -> Result<()> {
         );
     };
 
-    if !manifest_path.exists() {
-        bail!("Cargo.toml not found at {}", manifest_path.display());
-    }
+    // if !manifest_path.exists() {
+    //     bail!("Cargo.toml not found at {}", manifest_path.display());
+    // }
 
-    let manifest = std::fs::read_to_string(&manifest_path)?;
-    let manifest = cargo_toml::Manifest::from_str(&manifest)?;
-
-    search_paths.extend(
-        manifest
-            .workspace
-            .map(|workspace| {
-                workspace
-                    .members
-                    .into_iter()
-                    .map(|f| manifest_parent.join(f))
-            })
+    let manifest = cargo_toml::Manifest::from_path(&manifest_path)?;
+    search_paths.extend(manifest.workspace.into_iter().flat_map(|workspace| {
+        workspace
+            .members
             .into_iter()
-            .flatten(),
-    );
-    search_paths.push(manifest_path.parent().unwrap().to_path_buf());
+            .map(|f| manifest_parent.join(f))
+    }));
+    search_paths.push(manifest_parent.to_owned());
 
     if dependencies {
         let deps = manifest
@@ -236,14 +246,65 @@ fn main() -> Result<()> {
     }
 
     if search_paths.is_empty() {
+        eprintln!("No files found to include, searching in current directory");
         search_paths.push(PathBuf::from("."));
     }
 
     let args = Arc::new(args);
-    let mut source_files: Vec<_> = search_paths
-        .into_par_iter()
-        .flat_map(|f| walk_path(f, args.clone()))
-        .collect();
+    // let mut source_files: Vec<_> = search_paths
+    //     .into_par_iter()
+    //     .flat_map_iter(|f| walk_path(f, args.clone()))
+    //     .collect();
+    let mut source_files = WalkBuilder::new(search_paths[0].clone());
+    for path in search_paths.iter().skip(1) {
+        source_files.add(path);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    source_files
+        .standard_filters(args.skip_gitignore)
+        .build_parallel()
+        .run(|| {
+            let tx = tx.clone();
+            let args = args.clone();
+            Box::new(move |result| {
+                let Ok(path) = result else {
+                    return WalkState::Continue;
+                };
+
+                if let Some(path) = filter_path(
+                    &args.exclude,
+                    &args.extension,
+                    &args.smaller_than,
+                    &args.larger_than,
+                    &args.newer_than,
+                    &args.older_than,
+                    path,
+                ) {
+                    tx.send(path).unwrap();
+                }
+                WalkState::Continue
+            })
+        });
+    drop(tx);
+    let mut source_files = rx.iter().collect::<Vec<_>>();
+    // .filter_map(Result::ok)
+    // .flat_map(|f| {
+    //     filter_path(
+    //         &exclude,
+    //         &extension,
+    //         &smaller_than,
+    //         &larger_than,
+    //         &newer_than,
+    //         &older_than,
+    //         f,
+    //     )
+    // })
+    // .collect::<Vec<_>>();
+
+    if source_files.is_empty() {
+        eprintln!("No files found to include");
+        return Ok(());
+    }
 
     if let Some(max_files) = max_files {
         if source_files.len() > max_files {
@@ -269,7 +330,7 @@ fn main() -> Result<()> {
         .collect();
 
     // Sort the files by path
-    file_contents.par_sort_by_key(|(a, _)| a.clone());
+    file_contents.par_sort_by_cached_key(|(a, _)| a.clone());
 
     let head = head
         .map(|head| std::fs::read_to_string(&head))
@@ -335,10 +396,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn walk_path(
-    path: impl AsRef<std::path::Path>,
-    args: Arc<OnefileArgs>,
-) -> Vec<PathBuf> {
+fn walk_path(path: impl AsRef<std::path::Path>, args: Arc<OnefileArgs>) -> Vec<PathBuf> {
+    if path.as_ref().is_file() {
+        return vec![path.as_ref().to_owned()];
+    }
     let OnefileArgs {
         depth,
         skip_gitignore,
@@ -353,50 +414,73 @@ fn walk_path(
     WalkBuilder::new(path)
         .standard_filters(*skip_gitignore)
         .build()
+        // .run(|| {})
         .filter_map(Result::ok)
         .take_while(|e| e.depth() <= *depth)
         .filter_map(|f| {
-            let path = f.path();
-
-            // Extension filter
-            if let Some(extension) = &extension {
-                if !extension.iter().any(|ext_user| {
-                    path.extension()
-                        .map_or(false, |ext_file| ext_file.to_str() == Some(ext_user))
-                }) {
-                    return None;
-                }
-            } else if path.extension().map_or(false, |ext| ext == "rs") {
-                return None;
-            }
-
-            if exclude.iter().any(|e| path.ends_with(e)) {
-                return None;
-            }
-
-            if smaller_than.is_some() || larger_than.is_some() {
-                let metadata = f.metadata().ok()?;
-                let meta_len = metadata.len();
-                if smaller_than.is_some_and(|st| meta_len > st) {
-                    return None;
-                }
-                if larger_than.is_some_and(|lt| meta_len < lt) {
-                    return None;
-                }
-            }
-
-            if older_than.is_some() || newer_than.is_some() {
-                let metadata = f.metadata().ok()?;
-                let modified: DateTime<Utc> = metadata.modified().ok()?.into();
-                if older_than.is_some_and(|ot| modified > ot.and_utc()) {
-                    return None;
-                }
-                if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
-                    return None;
-                }
-            }
-
-            Some(path.to_path_buf())
+            filter_path(
+                exclude,
+                extension,
+                smaller_than,
+                larger_than,
+                newer_than,
+                older_than,
+                f,
+            )
         })
-        .collect::<Vec<_>>()
+        .collect()
+}
+
+fn filter_path(
+    exclude: &Vec<String>,
+    extension: &Option<Vec<String>>,
+    smaller_than: &Option<u64>,
+    larger_than: &Option<u64>,
+    newer_than: &Option<NaiveDateTime>,
+    older_than: &Option<NaiveDateTime>,
+    f: ignore::DirEntry,
+) -> Option<PathBuf> {
+    let path = f.path();
+
+    // Extension filter
+    if let Some(extension) = &extension {
+        if !extension.iter().any(|ext_user| {
+            path.extension()
+                .map_or(false, |ext_file| ext_file.to_str() == Some(ext_user))
+        }) {
+            return None;
+        }
+    } else if path.extension().map_or(false, |ext| ext == "rs") {
+        return None;
+    }
+
+    // Exclude filter
+    if exclude.iter().any(|e| path.ends_with(e)) {
+        return None;
+    }
+
+    // Size and date filters
+    if smaller_than.is_some() || larger_than.is_some() {
+        let metadata = f.metadata().ok()?;
+        let meta_len = metadata.len();
+        if smaller_than.is_some_and(|st| meta_len > st) {
+            return None;
+        }
+        if larger_than.is_some_and(|lt| meta_len < lt) {
+            return None;
+        }
+    }
+
+    if older_than.is_some() || newer_than.is_some() {
+        let metadata = f.metadata().ok()?;
+        let modified: DateTime<Utc> = metadata.modified().ok()?.into();
+        if older_than.is_some_and(|ot| modified > ot.and_utc()) {
+            return None;
+        }
+        if newer_than.is_some_and(|nt| modified < nt.and_utc()) {
+            return None;
+        }
+    }
+
+    Some(path.to_path_buf())
 }
