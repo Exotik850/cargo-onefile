@@ -4,7 +4,7 @@ use clap::Parser;
 use ignore::{WalkBuilder, WalkState};
 use rayon::prelude::*;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -179,8 +179,8 @@ fn main() -> Result<()> {
         table_of_contents,
         max_files,
         include,
-        exclude,
-        extension,
+        
+        
         ..
     } = args.clone();
 
