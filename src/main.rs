@@ -8,6 +8,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[derive(Parser, Debug)]
+#[command(name = "cargo")]
+#[command(bin_name = "cargo")]
+#[command(styles = clap_cargo::style::CLAP_STYLING)]
+enum Commands {
+    #[command(name = "onefile")]
+    #[command(author, version, about)]
+    Onefile(OnefileArgs),
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(name = "Cargo Onefile")]
 #[command(
@@ -163,7 +173,7 @@ struct OnefileArgs {
 }
 
 fn main() -> Result<()> {
-    let args = OnefileArgs::parse();
+    let Commands::Onefile(args) = Commands::parse();
     let OnefileArgs {
         stdout,
         dependencies,

@@ -110,6 +110,7 @@ dependencies = [
  "cargo_toml",
  "chrono",
  "clap",
+ "clap-cargo",
  "ignore",
  "rayon",
 ]
@@ -158,6 +159,16 @@ checksum = "b230ab84b0ffdf890d5a10abdbc8b83ae1c4918275daea1ab8801f71536b2651"
 dependencies = [
  "clap_builder",
  "clap_derive",
+]
+
+[[package]]
+name = "clap-cargo"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e3340d63f960ad376843dd750fb2aa4ac1b79e10775a070882bd135edfce303"
+dependencies = [
+ "anstyle",
+ "clap",
 ]
 
 [[package]]
