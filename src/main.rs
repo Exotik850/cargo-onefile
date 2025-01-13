@@ -226,8 +226,7 @@ fn main() -> Result<()> {
             .filter_map(|(_, dep)| {
                 // let path = dep.path.unwrap_or_else(|| format!("../{}", name));
                 dep.detail()
-                    .map(|f| f.path.as_ref())
-                    .flatten()
+                    .and_then(|f| f.path.as_ref())
                     .map(|f| manifest_parent.join(f))
             })
             .collect::<Vec<_>>();
@@ -262,7 +261,7 @@ fn main() -> Result<()> {
         .filter_map(|file| match std::fs::read_to_string(file) {
             Ok(content) => Some((file.clone(), content)),
             Err(e) => {
-                eprintln!("Error reading file: {}", e);
+                eprintln!("Error reading file: {e}");
                 None
             }
         })
@@ -310,22 +309,22 @@ fn main() -> Result<()> {
         );
     } else if stdout {
         if let Some(head) = head {
-            println!("{}", head);
+            println!("{head}");
         }
         if let Some(toc) = table_of_contents {
-            println!("{}", toc);
+            println!("{toc}");
         }
         for (file, content) in file_contents {
             println!("{} {}", separator, file.display());
-            println!("{}", content);
+            println!("{content}");
         }
     } else {
         let mut output = std::fs::File::create(&output)?;
         if let Some(head) = head {
-            writeln!(output, "{}", head)?;
+            writeln!(output, "{head}")?;
         }
         if let Some(toc) = table_of_contents {
-            writeln!(output, "{}", toc)?;
+            writeln!(output, "{toc}")?;
         }
         for (file, content) in file_contents {
             writeln!(output, "{} {}\n{}", separator, file.display(), content)?;
