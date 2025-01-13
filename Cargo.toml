@@ -1,6 +1,6 @@
 [package]
 name = "cargo-onefile"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A cargo subcommand to bundle a Rust project into a single file"
 repository = "https://github.com/exotik850/cargo-onefile"
@@ -14,5 +14,5 @@ anyhow = "1.0.80"
 cargo_toml = "0.19.2"
 clap = { version = "4.5.2", features = ["derive"] }
 rayon = "1.9.0"
-ignore = "0.4.22"
+ignore = { version = "0.4.22", features = ["simd-accel"] }
 chrono = "0.4.35"
