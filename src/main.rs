@@ -1,11 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use args::{Commands, OnefileArgs};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::Parser;
 use ignore::{WalkBuilder, WalkState};
 use rayon::prelude::*;
 use std::io::{BufRead, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 mod args;
@@ -77,7 +77,7 @@ fn generate_output(
     metadata: Option<ProjectMetadata>,
     start: Option<Instant>,
 ) -> Result<()> {
-    let head = args.head.as_ref().map(|f| std::fs::read(f)).transpose()?;
+    let head = args.head.as_ref().map(std::fs::read).transpose()?;
     let table_of_contents = args.table_of_contents.then(|| {
         generate_table_of_contents(&file_contents, head.map_or(0, |h| h.len())).into_bytes()
     });
@@ -122,7 +122,7 @@ fn write_output(
     for (path, contents) in file_contents {
         writeln!(cursor, "{} {}", &args.separator, path.display())?;
         cursor.write(&contents)?;
-        cursor.write(&['\n' as u8])?;
+        cursor.write(&[b'\n'])?;
     }
 
     Ok(())
@@ -202,15 +202,13 @@ fn collect_source_files(args: &OnefileArgs) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     };
     let mut search_paths = args
         .include
-        .iter()
-        .cloned()
-        .filter(|f| {
+        .iter().filter(|&f| {
             let x = f.is_dir() || f.is_file();
             if !x {
                 eprintln!("File not found: {}", f.display());
             }
             x
-        })
+        }).cloned()
         .collect::<Vec<_>>();
 
     // if !manifest_path.exists() {

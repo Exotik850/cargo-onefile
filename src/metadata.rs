@@ -21,10 +21,10 @@ impl ProjectMetadata {
         let package = manifest
             .package
             .context("No package section found in Cargo.toml")?;
-        let description = package.description().map(|s| s.to_string());
-        let repository = package.repository().map(|s| s.to_string());
-        let authors = package.authors().into_iter().cloned().collect();
-        let license = package.license().map(|s| s.to_string());
+        let description = package.description().map(std::string::ToString::to_string);
+        let repository = package.repository().map(std::string::ToString::to_string);
+        let authors = package.authors().to_vec();
+        let license = package.license().map(std::string::ToString::to_string);
         let version = package.version().to_string();
 
         // Try to read README file
@@ -66,7 +66,7 @@ impl ProjectMetadata {
         output.push_str(&format!("// Project: {} (v{})\n", self.name, self.version));
 
         if let Some(desc) = &self.description {
-            output.push_str(&format!("// Description: {}\n", desc));
+            output.push_str(&format!("// Description: {desc}\n"));
         }
 
         if !self.authors.is_empty() {
@@ -74,21 +74,21 @@ impl ProjectMetadata {
         }
 
         if let Some(license) = &self.license {
-            output.push_str(&format!("// License: {}\n", license));
+            output.push_str(&format!("// License: {license}\n"));
         }
 
         if let Some(repo) = &self.repository {
-            output.push_str(&format!("// Repository: {}\n", repo));
+            output.push_str(&format!("// Repository: {repo}\n"));
         }
 
-        output.push_str("\n");
+        output.push('\n');
 
         // Add README content if available
         if let Some(readme) = &self.readme {
             output.push_str("// README\n");
             output.push_str("// ======\n");
             for line in readme.lines() {
-                output.push_str(&format!("// {}\n", line));
+                output.push_str(&format!("// {line}\n"));
             }
             output.push_str("// ======\n\n");
         }
