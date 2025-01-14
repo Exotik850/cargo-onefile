@@ -72,7 +72,7 @@ pub struct OnefileArgs {
     ///
     /// Example:
     ///   cargo onefile --skip-gitignore false
-    #[arg(long, default_value = "true")]
+    #[arg(long, default_value_t=true)]
     pub skip_gitignore: bool,
 
     /// Info mode.
@@ -167,13 +167,13 @@ pub struct OnefileArgs {
     pub exclude: Vec<String>,
 
     /// Include project metadata at the top of the output.
-    #[arg(long, default_value="true")]
+    #[arg(long, default_value_t=true)]
     pub include_metadata: bool,
 
     /// Include the `Cargo.lock` file in the output
     /// 
     /// This is generally not wanted
-    #[arg(long, default_value="false")]
+    #[arg(long, default_value_t=false)]
     pub include_lock: bool,
 }
 

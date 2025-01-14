@@ -52,19 +52,16 @@ fn print_info_summary(file_contents: Vec<(PathBuf, Vec<u8>)>, start: Instant) {
 }
 
 fn generate_table_of_contents(file_contents: &[(PathBuf, Vec<u8>)], head_len: usize) -> String {
-    let toc_len = file_contents.len() + 5 + head_len;
+    assert!(file_contents.len() > 0, "No files to generate table of contents");
+    let toc_len = file_contents.len() + 5 + dbg!(head_len);
     let mut curr_line = 0;
     let mut toc = String::from("// Table of Contents\n// ==================\n");
     for (file, content) in file_contents {
-        let display = std::fs::canonicalize(file)
-            .as_ref()
-            .unwrap_or(file)
-            .display()
-            .to_string();
+        let disp = file.display().to_string();
         toc.push_str(&format!(
             "// Ln{} : {}\n",
             curr_line + toc_len,
-            display.trim_start_matches("\\\\?\\")
+            disp.trim_start_matches("\\\\?\\")
         ));
         curr_line += content.lines().count() + 2;
     }
@@ -202,13 +199,15 @@ fn collect_source_files(args: &OnefileArgs) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     };
     let mut search_paths = args
         .include
-        .iter().filter(|&f| {
+        .iter()
+        .filter(|&f| {
             let x = f.is_dir() || f.is_file();
             if !x {
                 eprintln!("File not found: {}", f.display());
             }
             x
-        }).cloned()
+        })
+        .cloned()
         .collect::<Vec<_>>();
 
     // if !manifest_path.exists() {
