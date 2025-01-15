@@ -53,7 +53,7 @@ fn print_info_summary(file_contents: Vec<(PathBuf, Vec<u8>)>, start: Instant) {
 
 fn generate_table_of_contents(file_contents: &[(PathBuf, Vec<u8>)], head_len: usize) -> String {
     assert!(file_contents.len() > 0, "No files to generate table of contents");
-    let toc_len = file_contents.len() + 5 + dbg!(head_len);
+    let toc_len = file_contents.len() + 5 + head_len;
     let mut curr_line = 0;
     let mut toc = String::from("// Table of Contents\n// ==================\n");
     for (file, content) in file_contents {
@@ -325,43 +325,47 @@ fn setup_walker(walker: &mut WalkBuilder, args: &OnefileArgs) {
         .standard_filters(args.skip_gitignore);
 }
 
-// Reduces a list of paths to files and/or dirs to a list of dirs to only files
+/// Reduces a list of paths to files and/or dirs to a list of dirs to only files.
+/// This function avoids iterating over the entire list multiple times by using a single pass
+/// to collect directories and then processing them in bulk.
 fn reduce_dir_list(paths: &mut Vec<PathBuf>, args: &OnefileArgs) -> Result<()> {
-    let mut to_recurse: Vec<_> = paths
+    // Collect indices of directories in the list
+    let dir_indices: Vec<_> = paths
         .iter()
-        .filter(|f| f.is_dir())
         .enumerate()
-        .map(|(i, _)| i)
+        .filter_map(|(i, path)| if path.is_dir() { Some(i) } else { None })
         .collect();
 
-    if to_recurse.is_empty() {
+    if dir_indices.is_empty() {
         return Ok(());
-    };
+    }
 
-    to_recurse.sort_unstable();
-    let last = to_recurse[to_recurse.len() - 1];
+    // Remove directories from the list and collect them
+    let mut dirs = dir_indices
+        .into_iter()
+        .rev()
+        .map(|i| paths.swap_remove(i));
 
-    let mut walker = WalkBuilder::new(paths.swap_remove(last));
-
-    for idx in to_recurse.into_iter().rev() {
-        let path = paths.swap_remove(idx);
-        walker.add(path);
+    // Initialize the walker with the first directory
+    let mut walker = WalkBuilder::new(dirs.next().unwrap());
+    for dir in dirs {
+        walker.add(dir);
     }
 
     setup_walker(&mut walker, args);
-    let mut dirty = false;
-    for path in walker.build() {
-        let path = path?;
-        let path = path.path();
-        if path.is_dir() {
-            dirty = true;
-        }
-        paths.push(path.to_path_buf());
-    }
 
-    if dirty {
-        reduce_dir_list(paths, args)?;
-    }
+    let new_paths = walker.build().filter_map(|result| {
+        let path = result.ok()?;
+        let path = path.path();
+        if path.is_file() {
+            Some(path.to_path_buf())
+        } else {
+            None
+        }
+    });
+
+    // Append the new files to the original list
+    paths.extend(new_paths);
 
     Ok(())
 }
