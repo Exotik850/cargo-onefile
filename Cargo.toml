@@ -1,6 +1,6 @@
 [package]
 name = "cargo-onefile"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "A cargo subcommand to bundle a Rust project into a single file"
 repository = "https://github.com/exotik850/cargo-onefile"

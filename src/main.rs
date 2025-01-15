@@ -1,3 +1,11 @@
+#![warn(
+    clippy::all,
+    clippy::restriction,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo
+)]
+
 use anyhow::{bail, Result};
 use args::{Commands, OnefileArgs};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -52,7 +60,10 @@ fn print_info_summary(file_contents: Vec<(PathBuf, Vec<u8>)>, start: Instant) {
 }
 
 fn generate_table_of_contents(file_contents: &[(PathBuf, Vec<u8>)], head_len: usize) -> String {
-    assert!(file_contents.len() > 0, "No files to generate table of contents");
+    assert!(
+        file_contents.len() > 0,
+        "No files to generate table of contents"
+    );
     let toc_len = file_contents.len() + 5 + head_len;
     let mut curr_line = 0;
     let mut toc = String::from("// Table of Contents\n// ==================\n");
@@ -119,7 +130,7 @@ fn write_output(
     for (path, contents) in file_contents {
         writeln!(cursor, "{} {}", &args.separator, path.display())?;
         cursor.write(&contents)?;
-        cursor.write(&[b'\n'])?;
+        cursor.write(b"\n")?;
     }
 
     Ok(())
@@ -341,10 +352,7 @@ fn reduce_dir_list(paths: &mut Vec<PathBuf>, args: &OnefileArgs) -> Result<()> {
     }
 
     // Remove directories from the list and collect them
-    let mut dirs = dir_indices
-        .into_iter()
-        .rev()
-        .map(|i| paths.swap_remove(i));
+    let mut dirs = dir_indices.into_iter().rev().map(|i| paths.swap_remove(i));
 
     // Initialize the walker with the first directory
     let mut walker = WalkBuilder::new(dirs.next().unwrap());
